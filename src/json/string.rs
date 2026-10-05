@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, TryLockError};
 ///
 /// Whitespace, case and normalization follow Unicode 18.0.0 whatever Rust release the crate is
 /// built with, and a length is counted in Unicode scalar values, as the Raoh Specification has
-/// them; they come from 199x-notation, which Raoh for Java, Go and Rust share.
+/// them; they come from notation-199x, which Raoh for Java, Go and Rust share.
 ///
 /// ```
 /// use raoh::json::prelude::*;

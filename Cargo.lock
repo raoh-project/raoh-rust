@@ -142,8 +142,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "notation199x"
-version = "0.1.0"
-source = "git+https://github.com/raoh-project/199x-notation?rev=254918041836b94e510b620415c9600d432d4ad7#254918041836b94e510b620415c9600d432d4ad7"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5970f4faa6d0d84216be552ad8d42bb4ff541907753d0688adf772b281ea8fc5"
 
 [[package]]
 name = "num-bigint"

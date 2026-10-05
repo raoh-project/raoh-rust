@@ -19,7 +19,7 @@ num-bigint = "0.5"
 num-traits = "0.2"
 # The text rules Raoh and Souther share: Unicode 18.0.0 case conversion, normalization and
 # White_Space, the temporal grammar and the pattern language.
-notation199x = { git = "https://github.com/raoh-project/199x-notation", rev = "254918041836b94e510b620415c9600d432d4ad7" }
+notation199x = "0.2.0"
 arrayvec = { version = "0.7", default-features = false }
 
 [features]

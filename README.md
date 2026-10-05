@@ -250,7 +250,7 @@ conversion's message is that of either issue it gives, so in
 range, reads `bad`, and a text longer than 3 still reads as `max_length` writes it.
 
 Whitespace, case and normalization follow Unicode 18.0.0 whatever Rust release the crate is built
-with, through [199x-notation](https://github.com/raoh-project/199x-notation), which Raoh for Java
+with, through [notation-199x](https://github.com/raoh-project/notation-199x), which Raoh for Java
 and Go use too: `trim` and `non_blank` use Unicode's `White_Space` (so U+3000 and U+00A0 are
 whitespace and control characters are not), `lowercase` writes a final sigma where Unicode's
 `Final_Sigma` condition holds, and lengths count Unicode scalar values. `pattern` takes the pattern

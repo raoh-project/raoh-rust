@@ -1,6 +1,6 @@
 //! Dates, times of day, date-times, date-times with an offset, and instants.
 //!
-//! Which text is one of these is decided by the grammar 199x-notation shares between Raoh and
+//! Which text is one of these is decided by the grammar notation-199x shares between Raoh and
 //! Souther, and the value is built from the fields its reading of the text gives, so the text is
 //! read once and by that grammar alone. Years run from -999999999 to 999999999, beyond what the
 //! usual date crates hold, so the types are this crate's own.
@@ -301,7 +301,7 @@ impl Chronological for OffsetDateTime {
     const KEY: &'static str = "invalid_format.offset_date_time";
 }
 
-// The fields 199x-notation gives are of text it admitted, within the ranges the types hold.
+// The fields notation-199x gives are of text it admitted, within the ranges the types hold.
 
 fn date(read: TemporalDate) -> Date {
     Date {
