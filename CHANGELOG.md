@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.9.0 - Unreleased
+## 0.9.0 - 2026-10-05
 
 The major and minor version are now the version of the Raoh Specification the crate follows, and
 the patch part is the crate's own. The decoders follow the Raoh Specification 0.9, and
