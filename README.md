@@ -27,7 +27,7 @@ value of it from outside is through its decoder, so a value that exists has been
 
 ```toml
 [dependencies]
-raoh = "0.9.0-dev"
+raoh = "0.9.0"
 ```
 
 Optional features:
@@ -443,13 +443,13 @@ feature off, and 91 µs with it on.
 
 ## The Raoh Specification
 
-The version of this crate is the version of the specification it follows: 0.9.0-dev follows the
-Raoh Specification 0.9.0-dev. This crate is checked against the [Raoh Specification](https://github.com/raoh-project/raoh-specification)
+The major and minor version of this crate are the version of the specification it follows, and
+the patch part is the crate's own: every 0.9.x follows the Raoh Specification 0.9. This crate is checked against the [Raoh Specification](https://github.com/raoh-project/raoh-specification)
 by `scripts/conformance.sh`, which runs every case of the revision `conformance/spec.lock` pins
 through the runner in `conformance/` and has the specification's `raoh-verify` compare what it
 gave with what each case expects. At the pinned revision:
 
-Raoh Specification 0.9.0-dev — core: conformant; encode: conformant; messages-en: conformant;
+Raoh Specification 0.9 — core: conformant; encode: conformant; messages-en: conformant;
 messages-ja: conformant.
 
 The runner reads each suite file into `Node`s and gives each case's input to the decoder as the

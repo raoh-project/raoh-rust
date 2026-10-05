@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.9.0-dev - Unreleased
+## 0.9.0 - Unreleased
 
-The version is now the version of the Raoh Specification the crate follows. The decoders follow
-the Raoh Specification 0.9.0-dev, and `scripts/conformance.sh` checks them
-against every case of its suite: core, encode, messages-en and messages-ja are conformant.
+The major and minor version are now the version of the Raoh Specification the crate follows, and
+the patch part is the crate's own. The decoders follow the Raoh Specification 0.9, and
+`scripts/conformance.sh` checks them against every case of its suite: core, encode, messages-en
+and messages-ja are conformant.
+
+notation199x is now the 0.2.0 release on crates.io instead of a commit of its repository.
 
 What each decoder accepts and reports:
 
@@ -19,7 +22,7 @@ What each decoder accepts and reports:
 - `with_default` gives the default for a null or missing input, looked at before the decoder runs.
   It gave the default whenever every issue was `required`, so an object missing a member was
   defaulted as a whole.
-- `trim`, `non_blank`, `lowercase` and `uppercase` follow Unicode 18.0.0 through 199x-notation,
+- `trim`, `non_blank`, `lowercase` and `uppercase` follow Unicode 18.0.0 through notation-199x,
   whatever Rust release the crate is built with, and lengths count Unicode scalar values.
 - `email` accepts the specification's ASCII profile of RFC 5321's `Mailbox`; `ulid` takes either
   case and refuses a value past 128 bits; `uuid` reads only the hyphenated 8-4-4-4-12 form.
