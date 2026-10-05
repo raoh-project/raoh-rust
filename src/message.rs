@@ -1,8 +1,9 @@
 //! Writing an issue's message in a person's language.
 
 use crate::issue::Issue;
-use crate::java;
-use serde_json::Value;
+use crate::message_keys;
+use crate::meta::MetaValue;
+use crate::properties;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
@@ -29,10 +30,11 @@ impl<F: Fn(&Issue) -> String> MessageResolver for F {
 /// A catalogue is a stack of layers, most specific first, as Raoh for Java's
 /// `ResourceBundleMessageResolver` reads a locale's `.properties` file before its parent's. An
 /// issue is looked up in one layer at a time: by its message key, then by its code, and only when
-/// neither gives a sentence in the next layer down. So a layer that translates just
+/// neither has a template in the next layer down. So a layer that translates just
 /// `invalid_format` wins over a refined key such as `invalid_format.email` in the layer beneath
-/// it. A template's `{name}` placeholders are filled from the issue's metadata; a template naming
-/// an entry the metadata lacks is passed over. When no template fits, the sentence is
+/// it. A template's `{name}` placeholders are filled with the message forms of the issue's
+/// metadata, as the Raoh Specification writes them; a placeholder naming an entry the metadata
+/// lacks stays as it is written. When no layer has a template, the sentence is
 /// `validation failed: <code>`.
 ///
 /// ```
@@ -56,16 +58,22 @@ pub struct Messages {
     parent: Option<Arc<Messages>>,
 }
 
+/// The English catalogue of the Raoh Specification, word for word, under a layer of this crate's
+/// own: the template for `invalid_format.json`, for text that is not JSON, which the specification
+/// leaves outside its input model. The layer is over the catalogue so that its key is found before
+/// the catalogue's `invalid_format`.
 static ENGLISH: LazyLock<Messages> = LazyLock::new(|| {
     Messages::from_properties(include_str!("messages/en.properties"))
         .expect("the English catalogue is well formed")
+        .with_overrides([(message_keys::INVALID_FORMAT_JSON, "not valid JSON")])
 });
 
-/// The Japanese templates over the English ones, as `messages_ja.properties` sits over
-/// `messages.properties`.
+/// The Japanese catalogue of the Raoh Specification under this crate's own Japanese template,
+/// over the English one, as `messages_ja.properties` sits over `messages.properties`.
 static JAPANESE: LazyLock<Messages> = LazyLock::new(|| {
     Messages::from_properties(include_str!("messages/ja.properties"))
         .expect("the Japanese catalogue is well formed")
+        .with_overrides([(message_keys::INVALID_FORMAT_JSON, "JSONとして読めません")])
         .falling_back_to(&ENGLISH)
 });
 
@@ -91,7 +99,7 @@ impl Messages {
     /// `\uXXXX` escapes and continued lines included. The `raoh.` prefix is optional. The
     /// catalogue falls back to nothing; give it one with [`falling_back_to`](Self::falling_back_to).
     pub fn from_properties(text: &str) -> Result<Self, PropertiesError> {
-        let pairs = java::load_properties(text).map_err(|e| PropertiesError {
+        let pairs = properties::load_properties(text).map_err(|e| PropertiesError {
             line: e.line,
             reason: e.reason,
         })?;
@@ -167,9 +175,9 @@ impl MessageResolver for Messages {
             .find_map(|layer| {
                 [issue.message_key(), issue.code()]
                     .into_iter()
-                    .filter_map(|key| layer.templates.get(key))
-                    .find_map(|template| fill(template, issue.meta()))
+                    .find_map(|key| layer.templates.get(key))
             })
+            .map(|template| fill(template, issue.meta()))
             .unwrap_or_else(|| format!("validation failed: {}", issue.code()))
     }
 }
@@ -196,9 +204,9 @@ impl fmt::Display for PropertiesError {
 
 impl std::error::Error for PropertiesError {}
 
-/// `template` with each `{name}` replaced by the metadata entry `name`, or `None` when an entry is
-/// missing.
-fn fill(template: &str, meta: &BTreeMap<String, Value>) -> Option<String> {
+/// `template` with each `{name}` replaced by the message form of the metadata entry `name`. A
+/// placeholder with no entry of that name stays as it is written.
+fn fill(template: &str, meta: &BTreeMap<String, MetaValue>) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -206,7 +214,10 @@ fn fill(template: &str, meta: &BTreeMap<String, Value>) -> Option<String> {
         let after = &rest[open + 1..];
         match after.find('}').map(|close| (close, &after[..close])) {
             Some((close, name)) if is_placeholder_name(name) => {
-                out.push_str(&display(meta.get(name)?));
+                match meta.get(name) {
+                    Some(value) => out.push_str(&value.to_string()),
+                    None => out.push_str(&rest[open..open + close + 2]),
+                }
                 rest = &after[close + 1..];
             }
             _ => {
@@ -216,7 +227,7 @@ fn fill(template: &str, meta: &BTreeMap<String, Value>) -> Option<String> {
         }
     }
     out.push_str(rest);
-    Some(out)
+    out
 }
 
 fn is_placeholder_name(name: &str) -> bool {
@@ -225,30 +236,6 @@ fn is_placeholder_name(name: &str) -> bool {
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-}
-
-/// A metadata value as text, as Java's `String.valueOf` writes the value Raoh for Java holds:
-/// strings without quotes, lists as `[a, b]`, maps as `{k=v}`, and a fractional number as
-/// `Double.toString` does.
-pub(crate) fn display(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Number(n) if n.is_f64() => n
-            .as_f64()
-            .map_or_else(|| n.to_string(), java::double_to_string),
-        Value::Array(items) => {
-            let items: Vec<String> = items.iter().map(display).collect();
-            format!("[{}]", items.join(", "))
-        }
-        Value::Object(entries) => {
-            let entries: Vec<String> = entries
-                .iter()
-                .map(|(k, v)| format!("{k}={}", display(v)))
-                .collect();
-            format!("{{{}}}", entries.join(", "))
-        }
-        other => other.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -268,14 +255,12 @@ mod tests {
     }
 
     #[test]
-    fn a_template_missing_a_meta_entry_falls_back_to_the_code() {
-        let messages = Messages::empty().with_overrides([
-            ("out_of_range.minimum", "at least {min}"),
-            ("out_of_range", "out of range"),
-        ]);
-        let issue =
-            Issue::new(codes::OUT_OF_RANGE).with_message_key(message_keys::OUT_OF_RANGE_MINIMUM);
-        assert_eq!(messages.resolve(&issue), "out of range");
+    fn a_placeholder_with_no_entry_stays_as_it_is_written() {
+        let issue = Issue::new(codes::OUT_OF_RANGE).with_meta("min", 1);
+        assert_eq!(
+            Messages::english().resolve(&issue),
+            "must be between 1 and {max}"
+        );
     }
 
     #[test]
@@ -321,13 +306,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unfillable_template_gives_way_to_the_same_key_beneath_it() {
-        let partial = Messages::english().with_overrides([("too_short", "{least}+ characters")]);
-        let issue = Issue::new(codes::TOO_SHORT).with_meta("min", 3);
-        assert_eq!(partial.resolve(&issue), "must be at least 3 characters");
-    }
-
-    #[test]
     fn falling_back_goes_beneath_every_layer_there_is() {
         let top = Messages::from_properties("raoh.blank=top")
             .unwrap()
@@ -351,22 +329,19 @@ mod tests {
     /// fall back to English for any of them.
     #[test]
     fn the_catalogues_cover_every_code_and_message_key() {
-        let english = Messages::from_properties(include_str!("messages/en.properties")).unwrap();
-        let japanese = Messages::from_properties(include_str!("messages/ja.properties")).unwrap();
+        let english = Messages::english();
+        let japanese_alone = Messages::from_properties(include_str!("messages/ja.properties"))
+            .unwrap()
+            .with_overrides([(message_keys::INVALID_FORMAT_JSON, "")]);
         for key in codes::ALL.iter().chain(message_keys::ALL) {
             assert!(
                 english.template(key).is_some(),
                 "no English template for {key}"
             );
             assert!(
-                japanese.template(key).is_some(),
+                japanese_alone.template(key).is_some(),
                 "no Japanese template for {key}"
             );
         }
-        let mut english_keys: Vec<&String> = english.templates.keys().collect();
-        let mut japanese_keys: Vec<&String> = japanese.templates.keys().collect();
-        english_keys.sort();
-        japanese_keys.sort();
-        assert_eq!(english_keys, japanese_keys);
     }
 }

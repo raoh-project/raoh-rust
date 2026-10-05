@@ -15,7 +15,7 @@ note: required because it appears within the type `raoh::combinator::Map<StringD
   |
   | pub struct Map<D, F> {
   |            ^^^
-note: required by a bound in `boxed`
+note: required by a bound in `raoh::Decoder::boxed`
  --> src/decoder.rs
   |
   |     fn boxed(self) -> BoxDecoder<I, Self::Output>
@@ -46,7 +46,7 @@ note: required because it appears within the type `raoh::combinator::Map<StringD
   |
   | pub struct Map<D, F> {
   |            ^^^
-note: required by a bound in `boxed`
+note: required by a bound in `raoh::Decoder::boxed`
  --> src/decoder.rs
   |
   |     fn boxed(self) -> BoxDecoder<I, Self::Output>

@@ -1,0 +1,15 @@
+[package]
+name = "raoh-conformance"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Runs the cases of the Raoh Specification on raoh and writes a runner result"
+
+# Not a member of a workspace: raoh is built here with serde_json keeping numbers as written,
+# which a build of raoh alone does not turn on.
+[workspace]
+
+[dependencies]
+raoh = { path = "..", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order"] }
+indexmap = "2"

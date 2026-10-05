@@ -1,5 +1,5 @@
 use raoh::json::prelude::*;
-use raoh::{BoxDecoder, Issue, decoder_fn};
+use raoh::{BoxDecoder, Issue, Messages, MetaValue, decoder_fn};
 
 fn paths(issues: &Issues) -> Vec<String> {
     issues.iter().map(|i| i.path().to_string()).collect()
@@ -100,10 +100,21 @@ fn one_of_lists_each_candidate_issues() {
     let issues = decoder.decode(&json!("ab")).unwrap_err();
     let issue = issues.iter().next().unwrap();
     assert_eq!(issue.code(), "one_of_failed");
-    let candidates = issue.meta()["candidates"].as_array().unwrap();
+    let candidates = issue.meta()["candidates"].as_list().unwrap();
     assert_eq!(candidates.len(), 2);
-    assert_eq!(candidates[1]["candidate"], 1);
-    assert_eq!(candidates[1]["issues"][0]["code"], "too_short");
+    let MetaValue::Record(second) = &candidates[1] else {
+        panic!("a candidate is a record");
+    };
+    assert_eq!(second["candidate"], MetaValue::from(1));
+    let MetaValue::Issues(found) = &second["issues"] else {
+        panic!("a candidate's issues are issues");
+    };
+    assert_eq!(found.iter().next().unwrap().code(), "too_short");
+
+    let japanese = issues.to_json_with(Messages::japanese());
+    let written = &japanese[0]["meta"]["candidates"][1]["issues"][0];
+    assert_eq!(written["code"], "too_short");
+    assert_eq!(written["message"], "3文字以上で入力してください");
 }
 
 #[derive(Debug)]
@@ -111,7 +122,7 @@ struct Node {
     children: Vec<Node>,
 }
 
-fn node() -> BoxDecoder<Value, Node> {
+fn node() -> BoxDecoder<Json, Node> {
     object((field("children", lazy(node).list()),))
         .map(|(children,)| Node { children })
         .boxed()
@@ -137,7 +148,7 @@ fn lazy_decodes_input_as_deep_as_serde_json_reads() {
 
 #[test]
 fn a_boxed_decoder_is_shared_across_threads() {
-    let decoder: std::sync::Arc<BoxDecoder<Value, i64>> = std::sync::Arc::new(i64().boxed());
+    let decoder: std::sync::Arc<BoxDecoder<Json, i64>> = std::sync::Arc::new(i64().boxed());
     let handles: Vec<_> = (0..4)
         .map(|n| {
             let decoder = std::sync::Arc::clone(&decoder);
@@ -155,4 +166,28 @@ fn from_str_reports_text_that_is_not_json() {
     assert_eq!(issue.code(), "invalid_format");
     assert!(issue.path().is_root());
     assert!(issue.meta().contains_key("line"));
+}
+
+#[test]
+fn lazy_builds_its_decoder_once_for_each_level_of_nesting() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static BUILT: AtomicUsize = AtomicUsize::new(0);
+
+    struct Tree(Vec<Tree>);
+    fn tree() -> BoxDecoder<Json, Tree> {
+        BUILT.fetch_add(1, Ordering::Relaxed);
+        object((field("children", lazy(tree).list()),))
+            .map(|(children,)| Tree(children))
+            .boxed()
+    }
+
+    let leaf = r#"{"children":[]}"#;
+    let text = format!(r#"{{"children":[{}]}}"#, vec![leaf; 100].join(","));
+    let decoder = tree();
+    for _ in 0..3 {
+        let Tree(children) = from_str(&decoder, &text).unwrap();
+        assert_eq!(children.len(), 100);
+    }
+    // The root's, and the one for the level of its children; the leaves have none to build.
+    assert_eq!(BUILT.load(Ordering::Relaxed), 2);
 }

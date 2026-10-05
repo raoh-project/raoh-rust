@@ -1,18 +1,18 @@
-error[E0277]: the trait bound `Issues: From<&str>` is not satisfied
+error[E0277]: the trait bound `raoh::Issues: From<&str>` is not satisfied
  --> tests/ui/and_then_error_must_become_issues.rs:4:19
   |
 4 |     let _ = i64().and_then(|n| if n > 0 { Ok(n) } else { Err("not positive") });
-  |                   ^^^^^^^^ the trait `From<&str>` is not implemented for `Issues`
+  |                   ^^^^^^^^ the trait `From<&str>` is not implemented for `raoh::Issues`
   |
 help: the following other types implement trait `From<T>`
  --> src/issue.rs
   |
   | impl From<Issue> for Issues {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Issues` implements `From<Issue>`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `raoh::Issues` implements `From<Issue>`
 ...
   | impl From<Vec<Issue>> for Issues {
-  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Issues` implements `From<Vec<Issue>>`
-  = note: required for `&str` to implement `Into<Issues>`
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `raoh::Issues` implements `From<Vec<Issue>>`
+  = note: required for `&str` to implement `Into<raoh::Issues>`
 note: required by a bound in `and_then`
  --> src/decoder.rs
   |

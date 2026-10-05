@@ -1,13 +1,15 @@
 use crate::codes;
 use crate::decoder::Decoder;
 use crate::issue::{Issue, Issues};
+use crate::meta::MetaValue;
 use crate::path::Path;
-use serde_json::{Map, Value};
 
 /// A decoder that tries each decoder of `alternatives` in order and gives the first success.
 ///
-/// When none succeeds it reports one `one_of_failed` issue, whose `candidates` metadata holds
-/// each alternative's index and issues.
+/// `alternatives` is a tuple, or a `Vec`, of decoders with the same output. When none succeeds it
+/// reports one `one_of_failed` issue at the input's path, whose `candidates` metadata lists, for
+/// each alternative, a record of its index as `candidate` and its issues as `issues`. The issues
+/// are kept as issues, so their messages are written in whatever language the whole is.
 ///
 /// ```
 /// use raoh::json::prelude::*;
@@ -48,14 +50,16 @@ impl<I: ?Sized, A: Alternatives<I>> Decoder<I> for OneOf<A> {
 
     fn decode_at(&self, input: &I, path: &Path<'_>) -> Result<A::Output, Issues> {
         self.0.first_success(input, path).map_err(|failures| {
-            let candidates: Vec<Value> = failures
-                .iter()
+            let candidates: Vec<MetaValue> = failures
+                .into_iter()
                 .enumerate()
                 .map(|(i, issues)| {
-                    let mut candidate = Map::new();
-                    candidate.insert("candidate".into(), i.into());
-                    candidate.insert("issues".into(), issues.to_json());
-                    Value::Object(candidate)
+                    [
+                        ("candidate", MetaValue::from(i)),
+                        ("issues", MetaValue::from(issues)),
+                    ]
+                    .into_iter()
+                    .collect()
                 })
                 .collect();
             Issue::at_path(path, codes::ONE_OF_FAILED)
@@ -65,8 +69,26 @@ impl<I: ?Sized, A: Alternatives<I>> Decoder<I> for OneOf<A> {
     }
 }
 
+impl<I: ?Sized, D: Decoder<I>> sealed::Sealed<I> for Vec<D> {}
+
+/// The decoders of the `Vec`, tried in order.
+impl<I: ?Sized, D: Decoder<I>> Alternatives<I> for Vec<D> {
+    type Output = D::Output;
+
+    fn first_success(&self, input: &I, path: &Path<'_>) -> Result<Self::Output, Vec<Issues>> {
+        let mut failures = Vec::with_capacity(self.len());
+        for decoder in self {
+            match decoder.decode_at(input, path) {
+                Ok(value) => return Ok(value),
+                Err(issues) => failures.push(issues),
+            }
+        }
+        Err(failures)
+    }
+}
+
 macro_rules! alternatives {
-    ($First:ident $first:tt $(, $T:ident $idx:tt)*) => {
+    ($First:ident $_first:ident $first:tt $(, $T:ident $_v:ident $idx:tt)*) => {
         impl<I: ?Sized, $First: Decoder<I>, $($T: Decoder<I, Output = $First::Output>),*>
             sealed::Sealed<I> for ($First, $($T,)*)
         {
@@ -99,19 +121,4 @@ macro_rules! alternatives {
     };
 }
 
-alternatives!(A 0);
-alternatives!(A 0, B 1);
-alternatives!(A 0, B 1, C 2);
-alternatives!(A 0, B 1, C 2, D 3);
-alternatives!(A 0, B 1, C 2, D 3, E 4);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9, L 10);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9, L 10, M 11);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9, L 10, M 11, N 12);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9, L 10, M 11, N 12, O 13);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9, L 10, M 11, N 12, O 13, P 14);
-alternatives!(A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, J 8, K 9, L 10, M 11, N 12, O 13, P 14, Q 15);
+for_tuples!(alternatives);

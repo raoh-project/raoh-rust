@@ -1,5 +1,4 @@
-use crate::codes;
-use crate::decoder::Decoder;
+use crate::decoder::{Decoder, Nullish};
 use crate::issue::{Issue, Issues};
 use crate::path::Path;
 use std::borrow::Cow;
@@ -135,7 +134,7 @@ impl<D, T> WithDefault<D, T> {
     }
 }
 
-impl<I: ?Sized, D, T> Decoder<I> for WithDefault<D, T>
+impl<I: ?Sized + Nullish, D, T> Decoder<I> for WithDefault<D, T>
 where
     D: Decoder<I, Output = T>,
     T: Clone,
@@ -143,11 +142,10 @@ where
     type Output = T;
 
     fn decode_at(&self, input: &I, path: &Path<'_>) -> Result<T, Issues> {
-        match self.inner.decode_at(input, path) {
-            Err(issues) if issues.iter().all(|i| i.code() == codes::REQUIRED) => {
-                Ok(self.value.clone())
-            }
-            result => result,
+        if input.is_null_or_missing() {
+            Ok(self.value.clone())
+        } else {
+            self.inner.decode_at(input, path)
         }
     }
 }
@@ -177,5 +175,33 @@ where
             .inner
             .decode_at(input, path)
             .unwrap_or_else(|_| self.value.clone()))
+    }
+}
+
+/// The decoder [`Decoder::recover_with`] returns.
+#[derive(Clone, Debug)]
+pub struct RecoverWith<D, F> {
+    inner: D,
+    f: F,
+}
+
+impl<D, F> RecoverWith<D, F> {
+    pub(crate) fn new(inner: D, f: F) -> Self {
+        Self { inner, f }
+    }
+}
+
+impl<I: ?Sized, D, F> Decoder<I> for RecoverWith<D, F>
+where
+    D: Decoder<I>,
+    F: Fn(&Issues) -> D::Output,
+{
+    type Output = D::Output;
+
+    fn decode_at(&self, input: &I, path: &Path<'_>) -> Result<D::Output, Issues> {
+        Ok(self
+            .inner
+            .decode_at(input, path)
+            .unwrap_or_else(|issues| (self.f)(&issues)))
     }
 }

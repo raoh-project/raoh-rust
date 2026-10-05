@@ -1,63 +1,6 @@
-//! What the operations Raoh for Java takes from the JDK mean, written once.
-//!
-//! Where a built-in decoder does what Raoh for Java does with a JDK method, it calls the function
-//! here rather than the Rust function that looks like it: `str::len` counts UTF-8 bytes where
-//! `String.length()` counts UTF-16 units, `f64`'s `Display` writes `10000000.0` where
-//! `Double.toString` writes `1.0E7`, and no Rust crate reads a `.properties` file as
-//! `Properties.load` does. Each function names the JDK method it follows, and the tests pin the
-//! inputs on which the two differ.
-//!
-//! Rules Raoh for Java defines itself rather than taking from the JDK are not here: whitespace is
-//! Unicode's `White_Space`, which `str::trim` already follows; the IP grammar is in `json::ip`;
-//! strings sort by code point, as `str` does.
-
-/// `String.length()`: the number of UTF-16 code units.
-pub(crate) fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
-}
-
-/// `Double.toString(double)`: the shortest decimal that reads back as `v`, written plainly with at
-/// least one fraction digit when 10⁻³ ≤ |v| < 10⁷ (`100.0`, `0.001`), and as `d.dddE±n`
-/// otherwise (`1.0E7`, `1.0E-4`).
-pub(crate) fn double_to_string(v: f64) -> String {
-    if v.is_nan() {
-        return "NaN".into();
-    }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.into();
-    }
-    let sign = if v.is_sign_negative() { "-" } else { "" };
-    if v == 0.0 {
-        return format!("{sign}0.0");
-    }
-    // Rust's `{:e}` writes the same shortest digits Java chooses, as `d.ddde±n`.
-    let scientific = format!("{:e}", v.abs());
-    let (mantissa, exponent) = scientific
-        .split_once('e')
-        .expect("`{:e}` writes an exponent");
-    let exponent: i32 = exponent.parse().expect("`{:e}` writes an integer exponent");
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    let magnitude = v.abs();
-    let body = if (1e-3..1e7).contains(&magnitude) {
-        // The decimal point goes after `exponent + 1` digits.
-        let point = exponent + 1;
-        if point <= 0 {
-            format!("0.{}{digits}", "0".repeat(point.unsigned_abs() as usize))
-        } else {
-            let point = point as usize;
-            if point >= digits.len() {
-                format!("{digits}{}.0", "0".repeat(point - digits.len()))
-            } else {
-                format!("{}.{}", &digits[..point], &digits[point..])
-            }
-        }
-    } else {
-        let (first, rest) = digits.split_at(1);
-        let rest = if rest.is_empty() { "0" } else { rest };
-        format!("{first}.{rest}E{exponent}")
-    };
-    format!("{sign}{body}")
-}
+//! Reading a `.properties` file as Java's `Properties.load` does, so that a catalogue of Raoh for
+//! Java, or of the Raoh Specification, reads here as it reads there. No Rust crate reads one with
+//! the same escapes and continuation lines.
 
 /// Where [`load_properties`] stopped reading.
 #[derive(Debug)]
@@ -170,30 +113,6 @@ fn unescape(raw: &str, number: usize) -> Result<String, PropertiesError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn doubles_are_written_as_java_writes_them() {
-        let cases = [
-            (0.0, "0.0"),
-            (-0.0, "-0.0"),
-            (1.0, "1.0"),
-            (100.0, "100.0"),
-            (0.5, "0.5"),
-            (0.001, "0.001"),
-            (0.0001, "1.0E-4"),
-            (1234567.0, "1234567.0"),
-            (1e7, "1.0E7"),
-            (1.25e7, "1.25E7"),
-            (-1.5e-5, "-1.5E-5"),
-            (1e21, "1.0E21"),
-            (123.456, "123.456"),
-            (f64::MAX, "1.7976931348623157E308"),
-            (f64::MIN_POSITIVE, "2.2250738585072014E-308"),
-        ];
-        for (v, java) in cases {
-            assert_eq!(double_to_string(v), java, "{v:e}");
-        }
-    }
 
     #[test]
     fn properties_follow_properties_load() {

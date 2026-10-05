@@ -1,6 +1,7 @@
 //! What a failed decode reports.
 
 use crate::message::{MessageResolver, Messages};
+use crate::meta::MetaValue;
 use crate::path::{Path, Pointer};
 use indexmap::IndexMap;
 use serde::ser::{Serialize, SerializeSeq, Serializer};
@@ -26,19 +27,22 @@ use std::fmt;
 /// let mine = Issue::new("checksum").with_message("the check digit does not match");
 /// assert_eq!(mine.message_with(Messages::japanese()), "the check digit does not match");
 /// ```
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Issue {
     inner: Box<Inner>,
 }
 
 /// Held behind a box so an `Issue`, and a `Result` whose error is one, stays one pointer wide.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Inner {
     path: Pointer,
     code: Cow<'static, str>,
     message_key: Cow<'static, str>,
-    meta: BTreeMap<String, Value>,
+    meta: BTreeMap<String, MetaValue>,
     message: Option<String>,
+    /// Whether a strict decoder reported this member as one it does not know, so that a strict
+    /// decoder around it does not report the member again.
+    unknown_member: bool,
 }
 
 impl Issue {
@@ -55,6 +59,7 @@ impl Issue {
                 code,
                 meta: BTreeMap::new(),
                 message: None,
+                unknown_member: false,
             }),
         }
     }
@@ -77,7 +82,7 @@ impl Issue {
     }
 
     /// This issue with one more entry of metadata.
-    pub fn with_meta(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+    pub fn with_meta(mut self, key: impl Into<String>, value: impl Into<MetaValue>) -> Self {
         self.inner.meta.insert(key.into(), value.into());
         self
     }
@@ -106,8 +111,19 @@ impl Issue {
 
     /// What else the code says about the problem, such as the bound a value fell outside of,
     /// in the order of its keys, as Raoh for Java keeps it.
-    pub fn meta(&self) -> &BTreeMap<String, Value> {
+    pub fn meta(&self) -> &BTreeMap<String, MetaValue> {
         &self.inner.meta
+    }
+
+    /// This issue marked as a strict decoder's report of a member it does not know.
+    pub(crate) fn marked_unknown_member(mut self) -> Self {
+        self.inner.unknown_member = true;
+        self
+    }
+
+    /// Whether a strict decoder reported this issue's member as one it does not know.
+    pub(crate) fn is_unknown_member(&self) -> bool {
+        self.inner.unknown_member
     }
 
     /// The message given with [`with_message`](Self::with_message), if there is one.
@@ -136,12 +152,19 @@ impl Issue {
         self
     }
 
-    fn to_json_with(&self, resolver: &(impl MessageResolver + ?Sized)) -> Value {
+    /// The issue as a JSON object of `path`, `code`, `message` and `meta`, with the message written
+    /// by `resolver`.
+    pub fn to_json_with(&self, resolver: &(impl MessageResolver + ?Sized)) -> Value {
         let mut object = Map::new();
         object.insert("path".into(), self.inner.path.to_string().into());
         object.insert("code".into(), self.code().into());
         object.insert("message".into(), self.message_with(resolver).into());
-        let meta: Map<String, Value> = self.inner.meta.clone().into_iter().collect();
+        let meta: Map<String, Value> = self
+            .inner
+            .meta
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_json_with(resolver)))
+            .collect();
         object.insert("meta".into(), Value::Object(meta));
         Value::Object(object)
     }
@@ -170,7 +193,7 @@ impl Serialize for Issue {
 /// Every issue a decode found, in the order it found them.
 ///
 /// A decode that fails returns at least one issue.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Issues(Vec<Issue>);
 
 impl Issues {

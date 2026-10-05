@@ -10,13 +10,14 @@ It is built around a parse-don't-validate approach:
 - return failures as values instead of panicking
 - attach structured errors to precise paths
 
-Serde already turns JSON text into a `serde_json::Value`. raoh turns that `Value` into domain
-values, and when the input is wrong it reports every problem it found, each with the JSON Pointer
-of where it was, instead of stopping at the first one.
+raoh reads JSON text, or a `serde_json::Value` an application already has, into domain values,
+and when the input is wrong it reports every problem it found, each with the JSON Pointer of where
+it was, instead of stopping at the first one.
 
 ```text
-JSON text --serde_json--> serde_json::Value --raoh--> domain values
-                                               \--> Issues (path, code, message, meta)
+JSON text ---raoh::json::from_str---> Node ---\
+serde_json::Value ------------------------------+--raoh--> domain values
+                                                     \--> Issues (path, code, message, meta)
 ```
 
 A domain type does not derive `Deserialize` and its fields stay private. The only way to get a
@@ -26,19 +27,20 @@ value of it from outside is through its decoder, so a value that exists has been
 
 ```toml
 [dependencies]
-raoh = "0.1"
+raoh = "0.9.0"
 ```
 
 Optional features:
 
-| Feature   | Adds                                                        |
-|-----------|-------------------------------------------------------------|
-| `regex`   | `string().pattern(...)`                                     |
-| `decimal` | `decimal()`, decoding into `rust_decimal::Decimal`          |
-| `uuid`    | `string().uuid()`, decoding into `uuid::Uuid`               |
-| `url`     | `string().url()`, decoding into `url::Url`                  |
+| Feature               | What it does                                                          |
+|-----------------------|-----------------------------------------------------------------------|
+| `arbitrary_precision` | Turns on `serde_json`'s feature of that name, so that a `serde_json::Value`'s number keeps the text it was written with (see [Input](#input)) |
+| `preserve_order`      | Turns on `serde_json`'s feature of that name, so that a `serde_json::Value`'s object keeps its members in the order written |
 
-The minimum supported Rust version is 1.87, with every feature.
+Both matter only to an application that decodes a `serde_json::Value`. Text read with
+`raoh::json::from_str` keeps every number's text and every object's order without them.
+
+The minimum supported Rust version is 1.88.
 
 ## Quick start
 
@@ -57,15 +59,15 @@ pub struct User {
     age: Age,
 }
 
-fn email() -> impl Decoder<Value, Output = Email> {
+fn email() -> impl Decoder<Json, Output = Email> {
     string().trim().lowercase().email().map(Email)
 }
 
-fn age() -> impl Decoder<Value, Output = Age> {
+fn age() -> impl Decoder<Json, Output = Age> {
     u32().range(0..=150).map(Age)
 }
 
-fn user() -> impl Decoder<Value, Output = User> {
+fn user() -> impl Decoder<Json, Output = User> {
     object((
         field("email", email()),
         field("age", age()),
@@ -100,11 +102,13 @@ pub trait Decoder<I: ?Sized> {
 }
 ```
 
-A decoder is a value that describes how to read an input. It holds no state and can be reused.
+A decoder is a value that describes how to read an input. What it gives depends on the input
+alone, so it can be reused and shared between threads. It may keep what it has worked out, such as
+the matchers of a `pattern`, but nothing that changes a result.
 Decoders compose like iterator adapters, and the composed type is hidden behind
-`impl Decoder<Value, Output = T>`. Where a type has to be named, such as a recursive decoder or a
+`impl Decoder<Json, Output = T>`. Where a type has to be named, such as a recursive decoder or a
 decoder kept in a struct field or a `static`, `.boxed()` turns it into a
-`BoxDecoder<Value, T>`, which is `Send + Sync`.
+`BoxDecoder<Json, T>`, which is `Send + Sync`.
 
 The walk down the input uses a `Path` borrowed from the stack, so a successful decode allocates
 nothing for paths. A path is copied out into a `Pointer` only when an issue is recorded.
@@ -132,12 +136,13 @@ let custom = Issue::new("checksum").with_message("the check digit does not match
 assert_eq!(custom.message_with(Messages::japanese()), "the check digit does not match");
 ```
 
-The codes, message keys and meta keys are the same as in Raoh for Java from 0.8 on, and the
-codes and meta keys the same as in raoh-php, so the same client-side
-handling works for all of them, and a catalogue written for Raoh for Java resolves these issues
-too. `tests/compat` runs the same inputs through Raoh for Java and checks this crate gives the same
-issues; the cases where it does not on purpose are listed there and under
-[Differences from Raoh for Java](#differences-from-raoh-for-java).
+The codes, message keys and meta keys are those of the
+[Raoh Specification](https://github.com/raoh-project/raoh-specification), which Raoh for Java and
+Go follow too, so the same client-side handling works for all of them, and a catalogue written for
+Raoh for Java resolves these issues too.
+
+`meta` holds each value with its type, as a `MetaValue`: a `float` bound of 0.1 is the `f32`
+nearest 0.1 and appears in a message as `0.1`, a decimal keeps its scale, and a date is a date.
 
 `Issues` keeps them in the order they were found. `flatten()` groups the English messages by
 path, and `to_json()` gives the `[{"path", "code", "message", "meta"}]` form, which is also what
@@ -210,49 +215,75 @@ All of these live in `raoh::json` and come with `use raoh::json::prelude::*`. Mi
 input is `required` for every one of them, and a value of another JSON type is `type_mismatch`.
 The constraints of one decoder run in the order written, and the first to fail is reported.
 
-`string()`: `trim`, `lowercase`, `uppercase`, `non_blank`, `min_length`, `max_length`, `length`,
-`starts_with`, `ends_with`, `contains`, `one_of`, `email`, `ip`, `ipv4`, `ipv6`, `ulid`, `cuid`,
-`pattern` (feature `regex`), and the conversions `parse::<T: FromStr>()`, `uuid()` (feature
-`uuid`) and `url()` (feature `url`). Lengths count characters, not bytes.
+`string()`: the transformations `trim`, `lowercase`, `uppercase` and `normalize(form)`; the
+constraints `non_blank`, `min_length`, `max_length`, `length`, `starts_with`, `ends_with`,
+`contains`, `one_of`, `pattern`, `email`, `ip`, `ipv4`, `ipv6`, `ulid` and `cuid`; and the
+conversions `to_int`, `to_long`, `to_decimal`, `to_bool`, `uuid`, `uri`, `url`, `instant`, `date`,
+`time`, `date_time`, `offset_date_time` and `parse::<T: FromStr>()`.
 
 `i32()`, `i64()`, `u32()`, `u64()`: `min`, `max`, `range(a..=b)`, `positive`, `multiple_of`,
 `one_of`, and for the signed ones `negative`, `non_negative` and `non_positive`. A number with a
-fraction, or one the type cannot hold, is `type_mismatch`.
+fraction or an exponent is `type_mismatch`, and one the type cannot hold is `type_mismatch` under
+the message key `type_mismatch.numeric_range`.
 
-`f64()`: `min`, `max`, `range`, `positive`, `negative`, `non_negative`, `non_positive`, `one_of`.
+`f32()`, `f64()`: `min`, `max`, `range`, `positive`, `negative`, `non_negative`, `non_positive`,
+`one_of`. A number is rounded to the type once, from its text; one beyond the type's range is
+`type_mismatch.numeric_range`. The bounds use the float order of the value model, in which -0 is
+below +0, so `negative` takes -0 and `non_negative` refuses it.
 
-`decimal()` (feature `decimal`): the numeric constraints plus `multiple_of` and `scale`.
-`serde_json` keeps a number as its nearest `f64` unless its `arbitrary_precision` feature is on,
-so enable that feature in the application when decimals must be exact.
+`decimal()`: a `Decimal` of any precision that keeps its scale, with the numeric constraints plus
+`multiple_of` and `scale`. The bounds compare by value.
 
 `bool()`: `is_true`, `is_false`.
 
-Every one of them takes `.message("...")`, which gives the most recent constraint written before
-it a custom message. Transformations such as `trim` cannot fail and are passed over, so
-`string().trim().message("...")` gives the message to the type check, and
-`string().min_length(3).trim().message("...")` gives it to `min_length`.
+The temporal conversions give this crate's `Date`, `Time`, `DateTime`, `OffsetDateTime` and
+`Instant`, with years from -999999999 to 999999999, and take `before`, `after` and `between`. An
+offset date-time keeps its offset and is compared by its instant: `09:00Z` and `10:00+01:00` are
+different values, and neither is before the other.
 
-Whitespace, character counts, string order, case folding and number formatting follow Raoh for
-Java 0.8: `trim` and `non_blank` use Unicode's `White_Space` (so U+3000 and U+00A0 are whitespace
-and control characters are not), lengths count code points, `one_of`, `discriminate` and
-`enum_of` sort by code point, `enum_of` folds ASCII case only, and a fractional bound appears in
-a message as `Double.toString` writes it, such as `1.0E7`. `ipv6` accepts the RFC 4291 text form
-without brackets, and a zone ID only on a link-local or non-global multicast address, decided by
-the text alone. An issue's `meta` iterates in key order.
+Every one of them takes `.message("...")`, which gives the most recent constraint written before
+it a custom message, or the reading of the value when there is none. Transformations such as
+`trim` cannot fail and are passed over, so `string().trim().message("...")` gives the message to
+the type check, and `string().min_length(3).trim().message("...")` gives it to `min_length`. A
+conversion's message is that of either issue it gives, so in
+`string().max_length(3).to_int().message("bad")` a text that is not an integer, or one out of
+range, reads `bad`, and a text longer than 3 still reads as `max_length` writes it.
+
+Whitespace, case and normalization follow Unicode 18.0.0 whatever Rust release the crate is built
+with, through [notation-199x](https://github.com/raoh-project/notation-199x), which Raoh for Java
+and Go use too: `trim` and `non_blank` use Unicode's `White_Space` (so U+3000 and U+00A0 are
+whitespace and control characters are not), `lowercase` writes a final sigma where Unicode's
+`Final_Sigma` condition holds, and lengths count Unicode scalar values. `pattern` takes the pattern
+language of the specification, the one Souther has, and matches a value in one pass over it:
+`\d`, `\w` and `\s` are ASCII, and a back reference or a lookaround is refused. `one_of`,
+`discriminate` and `enum_of` sort by code point, and `enum_of` folds ASCII case only. An issue's
+`meta` iterates in key order.
 
 ## Objects, lists and maps
 
 - `field(name, d)`: a member that must be there
 - `optional_field(name, d)`: `Option<T>`, `None` when the member is missing
 - `presence_field(name, d)`: `Presence<T>`, one of `Absent`, `Null` or `Present(T)`
+- `flat(d)`: the whole input read by `d`, as one value of the object
 - `d.nullable()`: `Option<T>`, `None` when the value is `null`
-- `d.list()`: `Vec<T>`, with `non_empty`, `min_size`, `max_size`, `size` and `unique`
+- `d.list()`: `Vec<T>`, with `non_empty`, `min_size`, `max_size`, `size`, `unique`, `contains`,
+  `contains_all` and `to_set`, which gives a `Set<T>`
 - `dict(d)`: an `IndexMap<String, T>` from an object used as a map, in the order the `Value`
-  keeps its keys
+  keeps its keys, with `non_empty`, `min_size`, `max_size` and `size`
 
-`object` requires its input to be an object. Anything else is one issue at the object's own path:
-`required` for missing or `null`, `type_mismatch` otherwise. A field is not a decoder on its own,
-so `optional_field` never reads a scalar as an object without that member.
+Each field of an `object` checks for itself that the input is an object. A required field of
+anything else, `null` and a missing member included, is `type_mismatch` with `expected` `object`
+at the field's own path; an optional field reads it as not having the member. `object(...).strict()`
+also reports every member no field names as `unknown_field`, and `strict(d, names)` does the same
+around any decoder, such as a `discriminate`. Strict decoders one inside another report a member
+once, by the innermost one that does not know it.
+
+`unique`, `contains`, `contains_all` and `to_set` compare elements by `Same`, the value model's
+sameness, not by Rust's `Eq`: for floats -0 and +0 are two values and every NaN one, and decimals
+of different scales differ. So `f64().list().to_set()` is a `Set<f64>` of each value once, though
+`f64` has no `Eq` or `Hash`. A type of your own, such as the enum `enum_of` decodes into, takes
+`same_by_eq!` for `Same`, and `meta_by_display!` for the message form `unique` and `contains`
+write an element in.
 
 A missing member and a `null` one are different inputs. `field("note", string().nullable())`
 accepts `null` but reports a missing member as `required`, while `optional_field` accepts a
@@ -274,12 +305,18 @@ assert_eq!(
 
 ## Choices
 
-- `enum_of([("red", Color::Red), ...])`: a string naming one of the values, ignoring ASCII case
-- `literal("v1")`: exactly that string
+- `enum_of([("red", Color::Red), ...])`: a string naming one of the values, ignoring ASCII case;
+  `.using(string().trim())` reads the string with another decoder
+- `literal("v1")`: exactly that string, with `.using(...)` too
 - `one_of((a, b, ...))`: the first alternative that decodes, or `one_of_failed` with each
   alternative's issues in `meta.candidates`
 - `discriminate("type", (variant("a", da), variant("b", db), ...))`: the variant the member
   `type` names
+- `discriminate_by("type", tag, variants)`: the variant the decoder `tag` names, which reads the
+  whole input, so the tag can be trimmed or lower-cased first
+
+The alternatives of `one_of` and the variants of `discriminate` can also be a `Vec`, and the fields
+of an `object` a `Vec` of boxed fields, for a decoder whose parts are decided at run time.
 
 ```rust
 use raoh::json::prelude::*;
@@ -290,7 +327,7 @@ pub enum Contact {
     Phone(String),
 }
 
-fn contact() -> impl Decoder<Value, Output = Contact> {
+fn contact() -> impl Decoder<Json, Output = Contact> {
     discriminate(
         "type",
         (
@@ -303,13 +340,15 @@ fn contact() -> impl Decoder<Value, Output = Contact> {
 let issues = contact().decode(&json!({"type": "fax"})).unwrap_err();
 let issue = issues.iter().next().unwrap();
 assert_eq!(issue.path().to_string(), "/type");
-assert_eq!(issue.meta()["allowed"], json!(["email", "phone"]));
+assert_eq!(issue.meta()["allowed"].to_string(), "[email, phone]");
 ```
 
 ## Defaults and recovery
 
-`with_default(v)` gives `v` when the input is missing or `null`, and still reports any other
-problem. `recover(v)` gives `v` whatever the problem was.
+`with_default(v)` gives `v` when the input is missing or `null`, looked at before the decoder
+runs, and otherwise gives what the decoder gives: an object that is there but lacks a member is
+reported, not defaulted. `recover(v)` gives `v` whatever the problem was, and `recover_with(f)`
+what `f` makes of the issues.
 
 ## Recursive structures
 
@@ -325,7 +364,7 @@ pub struct Category {
     children: Vec<Category>,
 }
 
-fn category() -> BoxDecoder<Value, Category> {
+fn category() -> BoxDecoder<Json, Category> {
     object((
         field("name", string().non_blank()),
         field("children", lazy(category).list()),
@@ -340,15 +379,17 @@ assert!(tree.is_ok());
 
 ## Messages in other languages
 
-`Messages::english()` and `Messages::japanese()` hold the catalogues Raoh for Java ships, word for
-word, plus a template for `invalid_format.json`. A catalogue is a stack of layers, as a locale's
+`Messages::english()` and `Messages::japanese()` hold the catalogues of the Raoh Specification,
+word for word, under a layer of this crate's own with a template for `invalid_format.json`. A catalogue is a stack of layers, as a locale's
 `.properties` file sits over its parent's: `japanese()` is a layer over `english()`,
 `with_overrides` puts a layer of your own on top, and `falling_back_to` puts another catalogue
 beneath. An issue is looked up one layer at a time, by message key and then by code, so a layer
 that translates only `invalid_format` wins over the refined `invalid_format.email` beneath it, as
 in Raoh for Java. `Messages::from_properties` reads a `.properties` file as Java's
 `Properties.load` does, `\uXXXX` escapes included, so an existing Raoh for Java catalogue can be
-used as it is. A template's `{name}` placeholders are filled from `meta`.
+used as it is. A template's `{name}` placeholders are filled with the message forms of `meta`,
+such as `1.0E7` for a float and `1E+3` for a decimal; a placeholder with no entry stays as it is
+written.
 
 ```rust
 use raoh::json::prelude::*;
@@ -363,52 +404,77 @@ assert_eq!(issues.flatten_with(&ours)[""], ["3 characters or more"]);
 
 Any `Fn(&Issue) -> String` is a resolver too.
 
-## Differences from Raoh for Java
+## Encoders
 
-In what it reports:
+`raoh::encode` writes values back as JSON. `encode::object::<T>()` builds an object encoder member
+by member, with `property(name, getter, encoder)` and `property_with_default(name, getter,
+encoder, default)`, whose getter gives an `Option` and whose default is written for `None`. Any
+`Fn(&T) -> Value` is an encoder too.
 
-- `object` checks once that its input is an object and reports one issue at its own path when it
-  is not. Raoh for Java checks in each field, reporting `type_mismatch` at every field's path and
-  reading a non-object as an object without any `optional_field`.
-- `uuid()` parses with the `uuid` crate, which also accepts 32 digits without hyphens and the
-  form in braces.
-- `url()` parses with the `url` crate, which follows the WHATWG URL Standard: it accepts `_` and
-  non-ASCII characters in a host, refuses a port above 65535, and normalises the URL, so
-  `https://example.com` becomes `https://example.com/`.
-- `pattern()` takes the syntax of the `regex` crate, where `\d`, `\w` and `\s` match Unicode
-  characters and Java's match ASCII only.
-- `serde_json` keeps an integer beyond the `u64` range as a float, as it keeps `1e20`, so the
-  integer decoders report it as a number that is not an integer (`type_mismatch` with `actual`),
-  where Raoh for Java reports it as outside the range (`type_mismatch.numeric_range`).
-- `serde_json` reads `-0.0` as the same float as `-0`, so the integer decoders read both as 0.
-  Raoh for Java refuses `-0.0`.
-- A fractional decimal bound outside 0.001 to 10⁷ appears in a message in exponent form, such as
-  `5.0E-4` where Raoh for Java writes `0.0005`, because `meta` holds it as a JSON number.
-- `strict()` reports unknown members in the order the `Value` keeps its keys. That is the input
-  order when `serde_json`'s `preserve_order` feature is enabled, as Raoh for Java reports them,
-  and sorted order otherwise.
+## Input
 
-In the API:
+Every decoder reads a `Json`, which is `dyn raoh::json::Input`: a value of the specification's
+input model, in which a number keeps the text it was written with. Two types are one.
+
+`raoh::json::Node` is what `raoh::json::from_str` reads JSON text into, and what `str::parse`
+gives. Every number keeps its text, held inside the node when it is up to 22 bytes long, which
+almost every number is, so reading a number allocates nothing. Every object keeps its members in
+the order written. A name written twice in one object, and arrays and objects nested more than
+128 deep, are `invalid_format`, as is text that is not JSON.
+
+`serde_json::Value` is one too, for an application that already has one, from a web framework
+for instance. Its numbers keep their text only with `serde_json`'s `arbitrary_precision` feature,
+which this crate's feature of the same name turns on, and then `serde_json` holds every number as
+a `String` of its own. Without it a number is the `i64`, `u64` or `f64` that `serde_json` read,
+and a decoder reads the text that value is written as: `1.50` as `1.5`, `-0` as `-0.0`. Even with
+the feature, `serde_json`'s parser reads an integer as an `i64` or `u64` first, so the text `-0`
+becomes `0`.
+
+## Numbers
+
+A decoder reads a number from its text, as the input model has it: `int` takes `1` and refuses
+`1.0` and `1e2`, `decimal` reads `1.50` with scale 2, `double` reads `-0` and `-0.0` as -0, and
+`float` rounds the text to `f32` once.
+
+Reading JSON text with `from_str` takes about as long as `serde_json::from_str` without
+`arbitrary_precision`, which loses that text, and less than half as long as with it. On an array
+of 1000 doubles, reading and decoding took 35 µs with `from_str`, 29 µs with `serde_json` and the
+feature off, and 91 µs with it on.
+
+## The Raoh Specification
+
+The major and minor version of this crate are the version of the specification it follows, and
+the patch part is the crate's own: every 0.9.x follows the Raoh Specification 0.9. This crate is checked against the [Raoh Specification](https://github.com/raoh-project/raoh-specification)
+by `scripts/conformance.sh`, which runs every case of the revision `conformance/spec.lock` pins
+through the runner in `conformance/` and has the specification's `raoh-verify` compare what it
+gave with what each case expects. At the pinned revision:
+
+Raoh Specification 0.9 — core: conformant; encode: conformant; messages-en: conformant;
+messages-ja: conformant.
+
+The runner reads each suite file into `Node`s and gives each case's input to the decoder as the
+node it is.
+
+The specification does not cover the API. Where this crate's API differs from Raoh for Java's:
 
 - Combining is done with tuples and `object`, not `combine`. There is no `nested`, because a
   member is handed to its decoder as a `Value` already.
 - `flatMap` is `and_then`, and there are no `Result`, `Ok` or `Err` types of its own: decoding
   gives `std::result::Result<T, Issues>`.
-- There is no encoder. Serde's `Serialize` covers that direction.
 - There is no domain construction guard (`raoh-gsh`). Private fields and module privacy stop a
   domain value from being built anywhere but its own module.
-- There are no date and time decoders yet. `string().parse::<T>()` reads any type that implements
-  `FromStr`, which includes the date types of `jiff` and `chrono`.
 
 ## Development
 
 ```sh
 cargo test --all-features
+scripts/conformance.sh
 ```
 
-`scripts/compat/generate.sh` regenerates `tests/compat/expected.json` and copies the message
-catalogues from the Raoh for Java version `scripts/compat/pom.xml` names. It needs Java 25 and
-Maven.
+`scripts/conformance.sh` needs git, jq and Go, which builds the specification's `raoh-verify`. It
+clones the specification at the pinned revision, or uses the checkout `RAOH_SPECIFICATION_DIR`
+names, and writes `conformance/target/runner-result.json` and
+`conformance/target/conformance-report.json`.
 
 ## License
 

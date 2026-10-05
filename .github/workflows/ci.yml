@@ -30,10 +30,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.87
+      - uses: dtolnay/rust-toolchain@1.88
       # Resolve afresh, as a user of the crate does, so what is tested is what they get: the
       # MSRV-aware resolver picks versions compatible with rust-version where it can.
       - run: cargo generate-lockfile
       # trybuild's expected compiler output is that of the job above, so it runs only there.
-      - run: cargo test --all-features --lib --test compat --test combinators
+      - run: cargo test --all-features --lib --test combinators
       - run: cargo test --all-features --doc
+
+  # The cases of the Raoh Specification at the commit conformance/spec.lock pins, run on this
+  # crate and checked by that commit's raoh-verify against conformance/conformance.json.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: check the runner
+        working-directory: conformance
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+      - run: scripts/conformance.sh
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance
+          path: |
+            conformance/target/runner-result.json
+            conformance/target/conformance-report.json
+          if-no-files-found: ignore

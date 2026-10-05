@@ -11,7 +11,7 @@ impl Variants for Anything {
         vec![]
     }
 
-    fn decode_variant(&self, _: &str, _: &Value, _: &Path<'_>) -> Option<Result<(), Issues>> {
+    fn decode_variant(&self, _: &str, _: &Json, _: &Path<'_>) -> Option<Result<(), Issues>> {
         None
     }
 }

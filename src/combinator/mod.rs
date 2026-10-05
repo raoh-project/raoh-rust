@@ -9,6 +9,6 @@ mod lazy;
 mod one_of;
 mod tuple;
 
-pub use adapters::{AndThen, Map, Pipe, Recover, Refine, WithDefault};
+pub use adapters::{AndThen, Map, Pipe, Recover, RecoverWith, Refine, WithDefault};
 pub use lazy::{Lazy, lazy};
 pub use one_of::{Alternatives, OneOf, one_of};

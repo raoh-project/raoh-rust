@@ -1,10 +1,15 @@
+use super::Json;
 use super::steps::Steps;
-use super::{node_type, required};
+use super::string::StringDecoder;
+use super::text::{Integral, Source, read_integer};
+use super::{View, required};
 use crate::decoder::Decoder;
 use crate::issue::{Issue, Issues};
+use crate::meta::MetaValue;
 use crate::path::Path;
+use crate::value::float::{Float, float_order, float_same};
 use crate::{codes, message_keys};
-use serde_json::Value;
+use std::cmp::Ordering;
 use std::ops::RangeInclusive;
 
 mod sealed {
@@ -17,8 +22,8 @@ mod sealed {
 
 /// An integer type a JSON number can be decoded into. It cannot be implemented outside this
 /// crate.
-pub trait Integer: sealed::Sealed + Copy + Ord + Into<Value> + Send + Sync + 'static {
-    /// What an issue names the type in `expected`, as Raoh for Java does.
+pub trait Integer: sealed::Sealed + Copy + Ord + Into<MetaValue> + Send + Sync + 'static {
+    /// What an issue names the type in `expected`.
     const EXPECTED: &'static str;
     /// The smallest positive value.
     const ONE: Self;
@@ -39,23 +44,6 @@ pub trait SignedInteger: Integer {
     const ZERO: Self;
     /// The largest negative value.
     const MINUS_ONE: Self;
-}
-
-/// The integer a JSON number is, or `None` when it is not one: when it has a fraction or an
-/// exponent, or is too large for `serde_json` to keep as an integer.
-///
-/// `serde_json` reads the text `-0` as the float `-0.0`; it is read here as the integer 0, as
-/// Jackson reads it. The text `-0.0` gives the same float and is read as 0 too, where Raoh for
-/// Java rejects it.
-fn integral(n: &serde_json::Number) -> Option<i128> {
-    n.as_i64()
-        .map(i128::from)
-        .or_else(|| n.as_u64().map(i128::from))
-        .or_else(|| {
-            n.as_f64()
-                .filter(|f| n.is_f64() && *f == 0.0 && f.is_sign_negative())
-                .map(|_| 0)
-        })
 }
 
 macro_rules! integer {
@@ -94,64 +82,93 @@ impl SignedInteger for i64 {
     const MINUS_ONE: Self = -1;
 }
 
-/// A decoder of a JSON integer into `T`.
+/// A decoder of an integer into `T`: a JSON number written as one, or with
+/// [`StringDecoder::to_int`] and [`StringDecoder::to_long`], a string.
 ///
-/// Missing or `null` is `required`. A value of another type, and a number with a fraction or an
-/// exponent, is `type_mismatch` with the type found as `actual` (`number` for such a number). An
-/// integer `T` cannot hold is `type_mismatch` under the message key
-/// `type_mismatch.numeric_range`, with `expected` alone, as Raoh for Java reports it.
+/// From JSON, missing or `null` is `required`. A value of another kind, and a number with a
+/// fraction or an exponent, is `type_mismatch` with the kind found as `actual` (`number` for such
+/// a number): `1.0` and `1e2` are not integers, as the text they are written with says. An integer
+/// `T` cannot hold is `type_mismatch` under the message key `type_mismatch.numeric_range`, with
+/// `expected` alone.
+///
+/// From a string, the text is `[+-]?[0-9]+`, leading zeros allowed; anything else is
+/// `type_mismatch` without `actual`, since the string was the kind expected and only its text
+/// failed to read.
+///
 /// Constraints run in the order they are written, and the first to fail is the one reported.
 #[derive(Clone, Debug)]
 pub struct IntDecoder<T> {
+    source: Source,
     steps: Steps<T>,
 }
 
-impl<T> Default for IntDecoder<T> {
-    fn default() -> Self {
+impl<T> IntDecoder<T> {
+    fn from_source(source: Source) -> Self {
         Self {
+            source,
             steps: Steps::default(),
         }
+    }
+
+    pub(crate) fn from_text(string: StringDecoder) -> Self {
+        Self::from_source(Source::Text(Box::new(string)))
     }
 }
 
 /// A decoder of a JSON integer into an `i32`.
 pub fn i32() -> IntDecoder<i32> {
-    IntDecoder::default()
+    IntDecoder::from_source(Source::Json)
 }
 
 /// A decoder of a JSON integer into an `i64`.
 pub fn i64() -> IntDecoder<i64> {
-    IntDecoder::default()
+    IntDecoder::from_source(Source::Json)
 }
 
 /// A decoder of a JSON integer into a `u32`.
 pub fn u32() -> IntDecoder<u32> {
-    IntDecoder::default()
+    IntDecoder::from_source(Source::Json)
 }
 
 /// A decoder of a JSON integer into a `u64`.
 pub fn u64() -> IntDecoder<u64> {
-    IntDecoder::default()
+    IntDecoder::from_source(Source::Json)
 }
 
-fn type_mismatch(path: &Path<'_>, expected: &'static str) -> Issue {
+fn expected(path: &Path<'_>, expected: &'static str) -> Issue {
     Issue::at_path(path, codes::TYPE_MISMATCH).with_meta("expected", expected)
 }
 
-impl<T: Integer> Decoder<Value> for IntDecoder<T> {
+fn numeric_range(path: &Path<'_>, name: &'static str) -> Issue {
+    expected(path, name).with_message_key(message_keys::TYPE_MISMATCH_NUMERIC_RANGE)
+}
+
+impl<T: Integer> Decoder<Json> for IntDecoder<T> {
     type Output = T;
 
-    fn decode_at(&self, input: &Value, path: &Path<'_>) -> Result<T, Issues> {
-        let found = match input {
-            Value::Number(n) => match integral(n) {
-                Some(value) => T::from_integer(value).ok_or_else(|| {
-                    type_mismatch(path, T::EXPECTED)
-                        .with_message_key(message_keys::TYPE_MISMATCH_NUMERIC_RANGE)
-                }),
-                None => Err(type_mismatch(path, T::EXPECTED).with_meta("actual", "number")),
+    fn decode_at(&self, input: &Json, path: &Path<'_>) -> Result<T, Issues> {
+        let found = match &self.source {
+            Source::Json => match input.view() {
+                View::Number(n) => match n.integral() {
+                    Integral::Value(v) => {
+                        T::from_integer(v).ok_or_else(|| numeric_range(path, T::EXPECTED))
+                    }
+                    Integral::TooLarge => Err(numeric_range(path, T::EXPECTED)),
+                    Integral::Not => Err(expected(path, T::EXPECTED).with_meta("actual", "number")),
+                },
+                view if view.is_null_or_missing() => Err(required(path)),
+                view => Err(expected(path, T::EXPECTED).with_meta("actual", view.kind())),
             },
-            Value::Null => Err(required(path)),
-            other => Err(type_mismatch(path, T::EXPECTED).with_meta("actual", node_type(other))),
+            Source::Text(string) => {
+                let text = string.decode_at(input, path)?;
+                match read_integer(&text) {
+                    Integral::Value(v) => {
+                        T::from_integer(v).ok_or_else(|| numeric_range(path, T::EXPECTED))
+                    }
+                    Integral::TooLarge => Err(numeric_range(path, T::EXPECTED)),
+                    Integral::Not => Err(expected(path, T::EXPECTED)),
+                }
+            }
         };
         let value = found.map_err(|issue| self.steps.base_issue(issue))?;
         self.steps.run(value, path)
@@ -163,8 +180,8 @@ fn out_of_range(key: &'static str) -> Issue {
 }
 
 impl<T: Integer> IntDecoder<T> {
-    /// Gives the most recent constraint written before this, or the type check when there is
-    /// none, a custom message that every language shows as written.
+    /// Gives the most recent constraint written before this, or the reading of the integer when
+    /// there is none, a custom message that every language shows as written.
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.steps.set_message(message.into());
         self
@@ -243,7 +260,7 @@ impl<T: Integer> IntDecoder<T> {
         self
     }
 
-    /// Requires one of `allowed`: `not_allowed` with the sorted `allowed` and `actual`.
+    /// Requires one of `allowed`: `not_allowed` with `allowed` in ascending order, and `actual`.
     pub fn one_of(mut self, allowed: impl IntoIterator<Item = T>) -> Self {
         let mut allowed: Vec<T> = allowed.into_iter().collect();
         allowed.sort();
@@ -253,10 +270,7 @@ impl<T: Integer> IntDecoder<T> {
             move |v| check.binary_search(v).is_ok(),
             move |v| {
                 Issue::new(codes::NOT_ALLOWED)
-                    .with_meta(
-                        "allowed",
-                        allowed.iter().map(|a| (*a).into()).collect::<Vec<Value>>(),
-                    )
+                    .with_meta("allowed", allowed.clone())
                     .with_meta("actual", *v)
             },
         );
@@ -305,47 +319,68 @@ impl<T: SignedInteger> IntDecoder<T> {
     }
 }
 
-/// A decoder of a JSON number into an `f64`.
+/// A decoder of a JSON number into a float, `f32` or `f64`.
 ///
-/// Missing or `null` is `required`; any other type is `type_mismatch`. An integer is read as the
-/// nearest `f64`. Bounds appear in messages as Java's `Double.toString` writes them, such as
-/// `1.0E7`.
-#[derive(Clone, Debug, Default)]
-pub struct F64Decoder {
-    steps: Steps<f64>,
+/// Any JSON number is read from its text and rounded to the nearest value of the type, once. A
+/// number whose magnitude rounds beyond the type's range is `type_mismatch` under the message key
+/// `type_mismatch.numeric_range`; a number with a minus sign whose value is zero, or that rounds
+/// to zero, is -0. Missing or `null` is `required`, and any other kind `type_mismatch`.
+///
+/// The bounds compare in the float order of the value model: -0 is below +0, so `negative` takes
+/// -0 and `non_negative` refuses it, and NaN is above everything. Bounds appear in messages as the
+/// shortest decimal that reads back as the bound, such as `0.1` for an `f32` and `1.0E7`.
+#[derive(Clone, Debug)]
+pub struct FloatDecoder<F> {
+    steps: Steps<F>,
 }
 
-/// A decoder of a JSON number into an `f64`.
+/// The decoder [`f32()`] returns.
+pub type F32Decoder = FloatDecoder<f32>;
+
+/// The decoder [`f64()`] returns.
+pub type F64Decoder = FloatDecoder<f64>;
+
+/// A decoder of a JSON number into an `f32`, with `expected` `float`.
+pub fn f32() -> F32Decoder {
+    FloatDecoder {
+        steps: Steps::default(),
+    }
+}
+
+/// A decoder of a JSON number into an `f64`, with `expected` `double`.
 pub fn f64() -> F64Decoder {
-    F64Decoder::default()
+    FloatDecoder {
+        steps: Steps::default(),
+    }
 }
 
-impl Decoder<Value> for F64Decoder {
-    type Output = f64;
+impl<F: Float> Decoder<Json> for FloatDecoder<F> {
+    type Output = F;
 
-    fn decode_at(&self, input: &Value, path: &Path<'_>) -> Result<f64, Issues> {
-        let found = match input {
-            Value::Number(n) => n
-                .as_f64()
-                .filter(|v| v.is_finite())
-                .ok_or_else(|| type_mismatch(path, "double")),
-            Value::Null => Err(required(path)),
-            other => Err(type_mismatch(path, "double").with_meta("actual", node_type(other))),
+    fn decode_at(&self, input: &Json, path: &Path<'_>) -> Result<F, Issues> {
+        let found = match input.view() {
+            View::Number(n) => match F::from_number(&n) {
+                Some(v) if !v.infinite() => Ok(v),
+                _ => Err(numeric_range(path, F::EXPECTED)),
+            },
+            view if view.is_null_or_missing() => Err(required(path)),
+            view => Err(expected(path, F::EXPECTED).with_meta("actual", view.kind())),
         };
         let value = found.map_err(|issue| self.steps.base_issue(issue))?;
         self.steps.run(value, path)
     }
 }
 
-impl F64Decoder {
+impl<F: Float> FloatDecoder<F> {
     fn bound(
         mut self,
-        ok: impl Fn(f64) -> bool + Send + Sync + 'static,
+        ok: impl Fn(Ordering) -> bool + Send + Sync + 'static,
+        against: F,
         key: &'static str,
-        bounds: Vec<(&'static str, f64)>,
+        bounds: Vec<(&'static str, F)>,
     ) -> Self {
         self.steps.require(
-            move |v| ok(*v),
+            move |v| ok(float_order(*v, against)),
             move |v| {
                 bounds
                     .iter()
@@ -358,26 +393,28 @@ impl F64Decoder {
         self
     }
 
-    /// Gives the most recent constraint written before this, or the type check when there is
-    /// none, a custom message that every language shows as written.
+    /// Gives the most recent constraint written before this, or the reading of the number when
+    /// there is none, a custom message that every language shows as written.
     pub fn message(mut self, message: impl Into<String>) -> Self {
         self.steps.set_message(message.into());
         self
     }
 
     /// Requires at least `min`: `out_of_range` with `min` and `actual`.
-    pub fn min(self, min: f64) -> Self {
+    pub fn min(self, min: F) -> Self {
         self.bound(
-            move |v| v >= min,
+            Ordering::is_ge,
+            min,
             message_keys::OUT_OF_RANGE_MINIMUM,
             vec![("min", min)],
         )
     }
 
     /// Allows at most `max`: `out_of_range` with `max` and `actual`.
-    pub fn max(self, max: f64) -> Self {
+    pub fn max(self, max: F) -> Self {
         self.bound(
-            move |v| v <= max,
+            Ordering::is_le,
+            max,
             message_keys::OUT_OF_RANGE_MAXIMUM,
             vec![("max", max)],
         )
@@ -385,59 +422,69 @@ impl F64Decoder {
 
     /// Requires a value within `range`, both ends included: `out_of_range` with `min`, `max` and
     /// `actual`.
-    pub fn range(self, range: RangeInclusive<f64>) -> Self {
+    pub fn range(mut self, range: RangeInclusive<F>) -> Self {
         let (min, max) = range.into_inner();
-        self.bound(
-            move |v| min <= v && v <= max,
-            message_keys::OUT_OF_RANGE_RANGE,
-            vec![("min", min), ("max", max)],
-        )
+        self.steps.require(
+            move |v| float_order(*v, min).is_ge() && float_order(*v, max).is_le(),
+            move |v| {
+                out_of_range(message_keys::OUT_OF_RANGE_RANGE)
+                    .with_meta("min", min)
+                    .with_meta("max", max)
+                    .with_meta("actual", *v)
+            },
+        );
+        self
     }
 
-    /// Requires a value above zero: `out_of_range` with `min` 0.0 and `actual`.
+    /// Requires a value above +0: `out_of_range` with `min` 0 and `actual`. -0 is not above +0.
     pub fn positive(self) -> Self {
         self.bound(
-            |v| v > 0.0,
+            Ordering::is_gt,
+            F::ZERO,
             message_keys::OUT_OF_RANGE_POSITIVE,
-            vec![("min", 0.0)],
+            vec![("min", F::ZERO)],
         )
     }
 
-    /// Requires a value below zero: `out_of_range` with `max` 0.0 and `actual`.
+    /// Requires a value below +0: `out_of_range` with `max` 0 and `actual`. -0 is below +0.
     pub fn negative(self) -> Self {
         self.bound(
-            |v| v < 0.0,
+            Ordering::is_lt,
+            F::ZERO,
             message_keys::OUT_OF_RANGE_NEGATIVE,
-            vec![("max", 0.0)],
+            vec![("max", F::ZERO)],
         )
     }
 
-    /// Requires zero or above: `out_of_range` with `min` 0.0 and `actual`.
+    /// Requires +0 or above: `out_of_range` with `min` 0 and `actual`. -0 is below +0.
     pub fn non_negative(self) -> Self {
         self.bound(
-            |v| v >= 0.0,
+            Ordering::is_ge,
+            F::ZERO,
             message_keys::OUT_OF_RANGE_NON_NEGATIVE,
-            vec![("min", 0.0)],
+            vec![("min", F::ZERO)],
         )
     }
 
-    /// Requires zero or below: `out_of_range` with `max` 0.0 and `actual`.
+    /// Requires +0 or below: `out_of_range` with `max` 0 and `actual`.
     pub fn non_positive(self) -> Self {
         self.bound(
-            |v| v <= 0.0,
+            Ordering::is_le,
+            F::ZERO,
             message_keys::OUT_OF_RANGE_NON_POSITIVE,
-            vec![("max", 0.0)],
+            vec![("max", F::ZERO)],
         )
     }
 
-    /// Requires one of `allowed`: `not_allowed` with the sorted `allowed` and `actual`.
-    pub fn one_of(mut self, allowed: impl IntoIterator<Item = f64>) -> Self {
-        let mut allowed: Vec<f64> = allowed.into_iter().collect();
-        allowed.sort_by(f64::total_cmp);
-        allowed.dedup();
+    /// Requires one of `allowed`, compared as the value model compares floats (+0 and -0 differ,
+    /// and NaN is NaN): `not_allowed` with `allowed` in the float order, and `actual`.
+    pub fn one_of(mut self, allowed: impl IntoIterator<Item = F>) -> Self {
+        let mut allowed: Vec<F> = allowed.into_iter().collect();
+        allowed.sort_by(|a, b| float_order(*a, *b));
+        allowed.dedup_by(|a, b| float_same(*a, *b));
         let check = allowed.clone();
         self.steps.require(
-            move |v| check.contains(v),
+            move |v| check.iter().any(|a| float_same(*a, *v)),
             move |v| {
                 Issue::new(codes::NOT_ALLOWED)
                     .with_meta("allowed", allowed.clone())
@@ -457,6 +504,10 @@ mod tests {
         result.unwrap_err().into_iter().next().unwrap()
     }
 
+    fn number(text: &str) -> crate::json::Node {
+        text.parse().unwrap()
+    }
+
     #[test]
     fn a_number_that_is_not_an_integer_names_what_it_is() {
         for issue in [
@@ -464,7 +515,7 @@ mod tests {
             first(u64().decode(&json!(1e2))),
         ] {
             assert_eq!(issue.message_key(), "type_mismatch");
-            assert_eq!(issue.meta()["actual"], "number");
+            assert_eq!(issue.meta()["actual"], MetaValue::from("number"));
         }
     }
 
@@ -479,7 +530,7 @@ mod tests {
             assert_eq!(issue.code(), "type_mismatch");
             assert_eq!(issue.message_key(), "type_mismatch.numeric_range");
             assert_eq!(issue.meta().len(), 1);
-            assert_eq!(issue.meta()["expected"], expected);
+            assert_eq!(issue.meta()["expected"], MetaValue::from(expected));
             assert_eq!(
                 issue.message(),
                 format!("value is outside the {expected} range")
@@ -490,26 +541,25 @@ mod tests {
     }
 
     #[test]
-    fn negative_zero_text_is_the_integer_zero() {
-        let minus_zero: Value = serde_json::from_str("-0").unwrap();
-        assert_eq!(i64().decode(&minus_zero).unwrap(), 0);
-        assert_eq!(u32().decode(&minus_zero).unwrap(), 0);
-    }
-
-    #[test]
     fn range_reports_both_bounds() {
         let issue = first(u32().range(0..=150).decode(&json!(200)));
         assert_eq!(issue.message_key(), "out_of_range.range");
-        assert_eq!(issue.meta()["min"], 0);
-        assert_eq!(issue.meta()["max"], 150);
-        assert_eq!(issue.meta()["actual"], 200);
+        assert_eq!(issue.meta()["min"], MetaValue::from(0));
+        assert_eq!(issue.meta()["max"], MetaValue::from(150));
+        assert_eq!(issue.meta()["actual"], MetaValue::from(200));
         assert_eq!(issue.message(), "must be between 0 and 150");
     }
 
     #[test]
     fn signed_positive_and_negative_bounds_follow_java() {
-        assert_eq!(first(i32().negative().decode(&json!(0))).meta()["max"], -1);
-        assert_eq!(first(i32().positive().decode(&json!(0))).meta()["min"], 1);
+        assert_eq!(
+            first(i32().negative().decode(&json!(0))).meta()["max"],
+            MetaValue::from(-1)
+        );
+        assert_eq!(
+            first(i32().positive().decode(&json!(0))).meta()["min"],
+            MetaValue::from(1)
+        );
     }
 
     #[test]
@@ -522,13 +572,54 @@ mod tests {
     }
 
     #[test]
-    fn f64_bounds_are_written_as_java_writes_doubles() {
-        assert_eq!(f64().decode(&json!(2)).unwrap(), 2.0);
-        assert_eq!(first(f64().decode(&json!("2"))).meta()["actual"], "string");
-        assert_eq!(first(f64().positive().decode(&json!(0))).meta()["min"], 0.0);
+    fn floats_are_rounded_once_and_keep_a_negative_zero() {
+        assert_eq!(f32().decode(&number("0.1")).unwrap(), 0.1f32);
+        assert!(f64().decode(&number("-0.0")).unwrap().is_sign_negative());
+        assert_eq!(
+            first(f64().decode(&number("1e400"))).message_key(),
+            "type_mismatch.numeric_range"
+        );
+        assert_eq!(
+            first(f32().decode(&number("1e39"))).meta()["expected"],
+            MetaValue::from("float")
+        );
+    }
+
+    #[test]
+    fn the_text_minus_zero_is_negative_zero_for_floats_and_zero_for_integers() {
+        let minus_zero = number("-0");
+        assert!(f64().decode(&minus_zero).unwrap().is_sign_negative());
+        assert!(f32().decode(&minus_zero).unwrap().is_sign_negative());
+        assert_eq!(i32().decode(&minus_zero).unwrap(), 0);
+        assert!(i64().decode(&number("-0.0")).is_err());
+    }
+
+    #[test]
+    fn a_serde_json_number_is_read_from_its_text_when_it_keeps_one() {
+        let minus_zero =
+            serde_json::Value::Number(serde_json::Number::from_string_unchecked("-0".into()));
+        assert!(f64().decode(&minus_zero).unwrap().is_sign_negative());
+        assert_eq!(i32().decode(&minus_zero).unwrap(), 0);
+        let big: serde_json::Value =
+            serde_json::from_str("123456789012345678901234567890").unwrap();
+        assert_eq!(
+            first(i64().decode(&big)).message_key(),
+            "type_mismatch.numeric_range"
+        );
+    }
+
+    #[test]
+    fn float_bounds_use_the_float_order() {
+        assert!(f64().negative().decode(&number("-0.0")).is_ok());
+        assert!(f64().non_negative().decode(&number("-0.0")).is_err());
+        assert!(f64().one_of([0.0]).decode(&number("-0.0")).is_err());
         assert_eq!(
             first(f64().min(1e7).decode(&json!(1))).message(),
             "must be at least 1.0E7"
+        );
+        assert_eq!(
+            first(f32().min(0.1).decode(&json!(0.05))).message(),
+            "must be at least 0.1"
         );
     }
 }

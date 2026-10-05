@@ -1,13 +1,13 @@
 error[E0277]: the trait bound `Anything: json::object::sealed::Sealed` is not satisfied
- --> tests/ui/field_set_is_sealed.rs:8:19
+ --> tests/ui/field_set_is_sealed.rs:7:19
   |
-8 | impl FieldSet for Anything {
+7 | impl FieldSet for Anything {
   |                   ^^^^^^^^ unsatisfied trait bound
   |
 help: the trait `json::object::sealed::Sealed` is not implemented for `Anything`
- --> tests/ui/field_set_is_sealed.rs:6:1
+ --> tests/ui/field_set_is_sealed.rs:5:1
   |
-6 | struct Anything;
+5 | struct Anything;
   | ^^^^^^^^^^^^^^^
   = help: the following other types implement trait `json::object::sealed::Sealed`:
             (A, B)
@@ -26,12 +26,12 @@ note: required by a bound in `FieldSet`
   |                     ^^^^^^^^^^^^^^ required by this bound in `FieldSet`
   = note: `FieldSet` is a "sealed trait", because to implement it you also need to implement `raoh::json::object::sealed::Sealed`, which is not accessible; this is usually done to force you to use one of the provided types that already implement it
   = help: the following types implement the trait:
+            std::boxed::Box<(dyn raoh::json::FieldSet<Output = O> + std::marker::Send + std::marker::Sync + 'static)>
+            raoh::json::MapFields<F, G>
+            std::vec::Vec<F>
             raoh::json::Field<D>
             raoh::json::OptionalField<D>
             raoh::json::PresenceField<D>
+            raoh::json::Flat<D>
             (A,)
-            (A, B)
-            (A, B, C)
-            (A, B, C, D)
-            (A, B, C, D, E)
           and $N others

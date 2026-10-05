@@ -80,8 +80,8 @@ pub mod codes {
 /// template only for the code still resolves it. An issue whose message key is not one of these
 /// uses its code as its key.
 ///
-/// These are the keys of Raoh for Java 0.8, for the checks this crate shares with it.
-/// `invalid_format.json` is this crate's own, for text that is not JSON.
+/// These are the keys of the Raoh Specification's issue catalogue. `invalid_format.json` is this
+/// crate's own, for text that is not JSON.
 pub mod message_keys {
     /// `out_of_range` from a lower bound.
     pub const OUT_OF_RANGE_MINIMUM: &str = "out_of_range.minimum";
@@ -97,14 +97,24 @@ pub mod message_keys {
     pub const OUT_OF_RANGE_NON_NEGATIVE: &str = "out_of_range.non_negative";
     /// `out_of_range` from `non_positive()`.
     pub const OUT_OF_RANGE_NON_POSITIVE: &str = "out_of_range.non_positive";
-    /// `type_mismatch` for an integer the type cannot hold.
+    /// `out_of_range` from `before()`.
+    pub const OUT_OF_RANGE_BEFORE: &str = "out_of_range.before";
+    /// `out_of_range` from `after()`.
+    pub const OUT_OF_RANGE_AFTER: &str = "out_of_range.after";
+    /// `out_of_range` from `between()`.
+    pub const OUT_OF_RANGE_BETWEEN: &str = "out_of_range.between";
+    /// `type_mismatch` for a number the type cannot hold.
     pub const TYPE_MISMATCH_NUMERIC_RANGE: &str = "type_mismatch.numeric_range";
+    /// `type_mismatch` for a map whose keys are not strings, which no decoder over JSON gives.
+    pub const TYPE_MISMATCH_STRING_KEYS: &str = "type_mismatch.string_keys";
     /// `too_small` from `non_empty()`.
     pub const TOO_SMALL_NONEMPTY: &str = "too_small.nonempty";
     /// `invalid_format` from `email()`.
     pub const INVALID_FORMAT_EMAIL: &str = "invalid_format.email";
     /// `invalid_format` from `url()`.
     pub const INVALID_FORMAT_URL: &str = "invalid_format.url";
+    /// `invalid_format` from `uri()`.
+    pub const INVALID_FORMAT_URI: &str = "invalid_format.uri";
     /// `invalid_format` from `uuid()`.
     pub const INVALID_FORMAT_UUID: &str = "invalid_format.uuid";
     /// `invalid_format` from `ip()`.
@@ -127,6 +137,16 @@ pub mod message_keys {
     pub const INVALID_FORMAT_ENUM: &str = "invalid_format.enum";
     /// `invalid_format` from `literal()`.
     pub const INVALID_FORMAT_LITERAL: &str = "invalid_format.literal";
+    /// `invalid_format` from `instant()`.
+    pub const INVALID_FORMAT_INSTANT: &str = "invalid_format.instant";
+    /// `invalid_format` from `date()`.
+    pub const INVALID_FORMAT_DATE: &str = "invalid_format.date";
+    /// `invalid_format` from `time()`.
+    pub const INVALID_FORMAT_TIME: &str = "invalid_format.time";
+    /// `invalid_format` from `date_time()`.
+    pub const INVALID_FORMAT_DATE_TIME: &str = "invalid_format.date_time";
+    /// `invalid_format` from `offset_date_time()`.
+    pub const INVALID_FORMAT_OFFSET_DATE_TIME: &str = "invalid_format.offset_date_time";
     /// `invalid_format` from text that is not JSON.
     pub const INVALID_FORMAT_JSON: &str = "invalid_format.json";
 
@@ -139,10 +159,15 @@ pub mod message_keys {
         OUT_OF_RANGE_NEGATIVE,
         OUT_OF_RANGE_NON_NEGATIVE,
         OUT_OF_RANGE_NON_POSITIVE,
+        OUT_OF_RANGE_BEFORE,
+        OUT_OF_RANGE_AFTER,
+        OUT_OF_RANGE_BETWEEN,
         TYPE_MISMATCH_NUMERIC_RANGE,
+        TYPE_MISMATCH_STRING_KEYS,
         TOO_SMALL_NONEMPTY,
         INVALID_FORMAT_EMAIL,
         INVALID_FORMAT_URL,
+        INVALID_FORMAT_URI,
         INVALID_FORMAT_UUID,
         INVALID_FORMAT_IP,
         INVALID_FORMAT_IPV4,
@@ -154,6 +179,11 @@ pub mod message_keys {
         INVALID_FORMAT_INCLUDES,
         INVALID_FORMAT_ENUM,
         INVALID_FORMAT_LITERAL,
+        INVALID_FORMAT_INSTANT,
+        INVALID_FORMAT_DATE,
+        INVALID_FORMAT_TIME,
+        INVALID_FORMAT_DATE_TIME,
+        INVALID_FORMAT_OFFSET_DATE_TIME,
         INVALID_FORMAT_JSON,
     ];
 }
